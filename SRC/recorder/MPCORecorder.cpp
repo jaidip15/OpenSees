@@ -1,7 +1,5 @@
 /*************************************************************************************
-
 notes, todo-list and workarounds
-
 note 1:
 some beams define a variable number of integration points. this is accounted for by
 this recorder. The only requirement is that the element should provide the
@@ -10,29 +8,23 @@ Now DispBeamColumn(2d or 3d)WithSensitivity do not implement it, furthermore the
 define their class tag in their own cpp file...
 For those elements the variable number of integration points is not supported.
 <update this node>
-
 note 2:
 gauss point / section index in the output from elem->setResponse are 1 based, while
 indices for fibers are 0-based. In the mpco result file we make everything 0-based.
-
 note 3:
 the most expensive part is the writeSection method. However MPCORecored calls this
 function only after a domain change. Some optimizations can be done....
-
 note 4:
 see $MP(2017/04/20)
-
 $WO:SHELL_SEC_KEYWORD
 workaround for shells, they used the "material" keyword for their section!
 it would be better to use "section" as in beams, but we cannot modify those files...
 \todo check the implementation of shell elements, if in future versions those elements
 will be fixed and will handle the section keyword, remove this workaround
-
 note 5:
 NDMaterial in setResponse gives unknownStress for stress components if type == PlabeFiber!
 todo: add auto-component naming in case of duplicated components!
 in STKO components are assumed all different!
-
 **************************************************************************************/
 
 // some definitions
@@ -45,7 +37,7 @@ Then we need to set the HDF5 include directory.
 And finally for the linker: hdf5 or libhdf5
 and path to HDF5 lib dir
 */
-#define MPCO_HDF5_LOADED_AT_RUNTIME 
+// #define MPCO_HDF5_LOADED_AT_RUNTIME 
 
 /* if hdf5 is loaded at runtime, this macro makes the process of loading hdf5 verbose */
 #define MPCO_LIBLOADER_VERBOSE
@@ -119,9 +111,7 @@ while opensees is writing data. Warning: this is a new feature in hdf5 version 1
 #include <stdint.h>
 
 /*************************************************************************************
-
 macros
-
 **************************************************************************************/
 
 #ifndef M_PI
@@ -3392,16 +3382,13 @@ namespace mpco {
 		typedef std::vector<ResultRecorder> ResultRecorderCollection;
 
 		/*************************************************************************************
-
 		utilities for element mapping based on:
 		class tag
 		integration rule
 		default or custom integration rule
 		<element group>
-
 		In this way all elements in <element group> share the same:
 		1) number of nodes, 2) number and location of integration points
-
 		**************************************************************************************/
 
 		struct ElementIntegrationRule
@@ -3535,6 +3522,13 @@ namespace mpco {
 					get class tag, geometry and integration rule type
 					*/
 					int elem_type = current_element->getClassTag();
+
+					if (elem_type == ELE_TAG_Subdomain)
+					{
+						//Skip subdomains
+						continue;
+					}
+
 					ElementGeometryType::Enum geom_type;
 					ElementIntegrationRuleType::Enum int_rule_type;
 					getGeometryAndIntRuleByClassTag(elem_type, geom_type, int_rule_type);
@@ -4003,10 +3997,8 @@ namespace mpco {
 }
 
 /*************************************************************************************
-
 private_data class.
 private storage class for MPCORecorder
-
 **************************************************************************************/
 
 class MPCORecorder::private_data
@@ -4079,9 +4071,7 @@ public:
 };
 
 /*************************************************************************************
-
 MPCORecorder class implementation
-
 **************************************************************************************/
 
 MPCORecorder::MPCORecorder()
@@ -4279,7 +4269,7 @@ int MPCORecorder::sendSelf(int commitTag, Channel &theChannel)
 	
 	// send misc info
 	{
-		ID aux(8);
+		ID aux(9);
 		aux(0) = getTag();
 		aux(1) = m_data->send_self_count; // use the send self counter as p_id in the receiver
 		aux(2) = static_cast<int>(m_data->filename.size());
@@ -4288,6 +4278,8 @@ int MPCORecorder::sendSelf(int commitTag, Channel &theChannel)
 		aux(5) = static_cast<int>(m_data->has_region);
 		aux(6) = static_cast<int>(m_data->node_set.size());
 		aux(7) = static_cast<int>(m_data->elem_set.size());
+		aux(8) = static_cast<int>(m_data->sens_grad_indices.size());
+
 		if (theChannel.sendID(0, commitTag, aux) < 0) {
 			opserr << "MPCORecorder::sendSelf() - failed to send misc info\n";
 			return -1;
@@ -4378,7 +4370,7 @@ int MPCORecorder::sendSelf(int commitTag, Channel &theChannel)
 int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
 	if (theChannel.isDatastore() == 1) {
-		opserr << "MPCORecorder::sendSelf() - does not send data to a datastore\n";
+		opserr << "MPCORecorder::recvSelf() - does not recv data to a datastore\n";
 		return -1;
 	}
 
@@ -4396,10 +4388,11 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 	size_t aux_res_merged_string_size(0);
 	size_t aux_node_set_size(0);
 	size_t aux_elem_set_size(0);
+	size_t aux_sens_grad_indices_size(0);
 	{
-		ID aux(8);
+		ID aux(9);
 		if (theChannel.recvID(0, commitTag, aux) < 0) {
-			opserr << "MPCORecorder::sendSelf() - failed to recv misc info\n";
+			opserr << "MPCORecorder::recvSelf() - " << m_data->p_id  << " - failed to recv misc info\n";
 			return -1;
 		}
 		setTag(aux(0));
@@ -4407,7 +4400,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 		aux_filename_size = aux(2);
 		aux_node_res_size = aux(3);
 		aux_res_merged_string_size = aux(4);
-		m_data->has_region = aux(5) != 0;
+		m_data->has_region = aux(5);// != 0;
 		aux_node_set_size = static_cast<size_t>(aux(6));
 		aux_elem_set_size = static_cast<size_t>(aux(7));
 	}
@@ -4417,7 +4410,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 		std::vector<char> aux(aux_filename_size);
 		Message msg(aux.data(), static_cast<int>(aux_filename_size));
 		if (theChannel.recvMsg(0, commitTag, msg) < 0) {
-			opserr << "MPCORecorder::sendSelf() - failed to recv filename\n";
+			opserr << "MPCORecorder::recvSelf() - failed to recv filename\n";
 			return -1;
 		}
 		m_data->filename = std::string(aux.begin(), aux.end());
@@ -4427,7 +4420,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 	{
 		Vector aux(3);
 		if (theChannel.recvVector(0, commitTag, aux) < 0) {
-			opserr << "MPCORecorder::sendSelf() - failed to recv output frequency\n";
+			opserr << "MPCORecorder::recvSelf() - failed to recv output frequency\n";
 			return -1;
 		}
 		m_data->output_freq.type = static_cast<mpco::OutputFrequency::IncrementType>(static_cast<int>(aux(0)));
@@ -4439,7 +4432,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 	if (aux_node_res_size > 0) {
 		ID aux(static_cast<int>(aux_node_res_size));
 		if (theChannel.recvID(0, commitTag, aux) < 0) {
-			opserr << "MPCORecorder::sendSelf() - failed to recv node result requests\n";
+			opserr << "MPCORecorder::recvSelf() - failed to recv node result requests\n";
 			return -1;
 		}
 		m_data->nodal_results_requests.resize(aux_node_res_size);
@@ -4448,14 +4441,14 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 	}
 
 	// recv node result requests (sens grad indices)
-	if (m_data->sens_grad_indices.size() > 0) {
-		ID aux(static_cast<int>(aux_node_res_size));
+	if (aux_sens_grad_indices_size > 0) {
+		ID aux(static_cast<int>(aux_sens_grad_indices_size));
 		if (theChannel.recvID(0, commitTag, aux) < 0) {
-			opserr << "MPCORecorder::sendSelf() - failed to recv node result requests (sensitivity parameter indices)\n";
+			opserr << "MPCORecorder::recvSelf() - failed to recv node result requests (sensitivity parameter indices)\n";
 			return -1;
 		}
-		m_data->sens_grad_indices.resize(aux_node_res_size);
-		for (size_t i = 0; i < aux_node_res_size; i++)
+		m_data->sens_grad_indices.resize(aux_sens_grad_indices_size);
+		for (size_t i = 0; i < aux_sens_grad_indices_size; i++)
 			m_data->sens_grad_indices[i] = aux(static_cast<int>(i));
 	}
 
@@ -4463,8 +4456,8 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 	if (aux_res_merged_string_size > 0) {
 		std::vector<char> aux(aux_res_merged_string_size);
 		Message msg(aux.data(), static_cast<int>(aux_res_merged_string_size));
-		if (theChannel.sendMsg(0, commitTag, msg) < 0) {
-			opserr << "MPCORecorder::sendSelf() - failed to recv element result requests\n";
+		if (theChannel.recvMsg(0, commitTag, msg) < 0) {
+			opserr << "MPCORecorder::recvSelf() - failed to recv element result requests\n";
 			return -1;
 		}
 		std::vector<std::string> aux_1;
@@ -4481,7 +4474,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 		if (aux_node_set_size > 0) {
 			ID aux(static_cast<int>(aux_node_set_size));
 			if (theChannel.recvID(0, commitTag, aux) < 0) {
-				opserr << "MPCORecorder::sendSelf() - failed to recv node set\n";
+				opserr << "MPCORecorder::recvSelf() - failed to recv node set\n";
 				return -1;
 			}
 			m_data->node_set.resize(aux_node_set_size);
@@ -4493,7 +4486,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 		if (aux_elem_set_size > 0) {
 			ID aux(static_cast<int>(aux_elem_set_size));
 			if (theChannel.recvID(0, commitTag, aux) < 0) {
-				opserr << "MPCORecorder::sendSelf() - failed to recv elem set\n";
+				opserr << "MPCORecorder::recvSelf() - failed to recv elem set\n";
 				return -1;
 			}
 			m_data->elem_set.resize(aux_elem_set_size);
@@ -4536,6 +4529,7 @@ int MPCORecorder::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker 
 			}
 		}
 	}
+	_info << "]\n";
 	_info << "elem set:" << "\n" << "[";
 	{
 		int n_counter(0);
@@ -6273,9 +6267,7 @@ int MPCORecorder::recordResultsOnElements()
 }
 
 /*************************************************************************************
-
 MPCORecorder generator
-
 **************************************************************************************/
 
 /* static class instance counter */
@@ -6517,4 +6509,3 @@ void* OPS_MPCORecorder()
 		new_recorder->m_data->elem_set.push_back(*it);
 	return new_recorder;
 }
-
