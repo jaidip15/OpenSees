@@ -37,7 +37,7 @@ Then we need to set the HDF5 include directory.
 And finally for the linker: hdf5 or libhdf5
 and path to HDF5 lib dir
 */
-// #define MPCO_HDF5_LOADED_AT_RUNTIME 
+ //#define MPCO_HDF5_LOADED_AT_RUNTIME 
 
 /* if hdf5 is loaded at runtime, this macro makes the process of loading hdf5 verbose */
 #define MPCO_LIBLOADER_VERBOSE
